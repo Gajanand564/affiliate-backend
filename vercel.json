@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "api/index.js", "use": "@vercel/node" }
+  ],
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index.js" }
+  ],
+  "env": {
+    "DATA_DIR": "/tmp/data",
+    "UPLOADS_DIR": "/tmp/uploads"
+  }
+}

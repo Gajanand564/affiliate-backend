@@ -285,9 +285,32 @@ const SEED_CATEGORIES = [
 const SEED_DEALS = [];
 
 // ─── Start server ─────────────────────────────────────────
-initData().then(() => {
-  app.listen(PORT, () => {
-    console.log(`\n🚀 DealZone API running on http://localhost:${PORT}`);
-    console.log(`📊 Admin login → username: admin | password: admin123\n`);
+// On Vercel the exported `app` is invoked directly per-request by the
+// serverless runtime — app.listen() must not run there (no port to bind,
+// and it would keep the function alive instead of returning). Locally /
+// on a normal host, initData() seeds default data, then the app listens.
+//
+// IMPORTANT (see README-VERCEL.md): Vercel's filesystem is read-only
+// except /tmp, and /tmp is wiped on every cold start. initData() re-seeds
+// on each cold start, so deals/admin-panel changes will NOT persist
+// reliably when deployed this way — this is a platform limitation, not a
+// bug here. Fine for a quick test; not fine for the pinterest-bot's
+// auto-sync to actually stick. Fix: move data/*.json storage to an
+// external database (see README-VERCEL.md).
+if (process.env.VERCEL) {
+  // initData() is re-run once per cold start (see comment above) — cached
+  // per warm container so it doesn't re-seed on every single request.
+  let ready = null;
+  module.exports = (req, res) => {
+    if (!ready) ready = initData();
+    ready.then(() => app(req, res));
+  };
+} else {
+  initData().then(() => {
+    app.listen(PORT, () => {
+      console.log(`\n🚀 DealZone API running on http://localhost:${PORT}`);
+      console.log(`📊 Admin login → username: admin | password: admin123\n`);
+    });
   });
-});
+  module.exports = app;
+}
