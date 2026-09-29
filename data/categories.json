@@ -1,48 +1,7 @@
 [
   {
-    "id": "tech",
-    "name": "Tech",
-    "icon": "💻"
-  },
-  {
-    "id": "gaming",
-    "name": "Gaming",
-    "icon": "🎮"
-  },
-  {
-    "id": "fashion",
-    "name": "Fashion",
-    "icon": "👗"
-  },
-  {
-    "id": "health",
-    "name": "Health",
-    "icon": "💊"
-  },
-  {
-    "id": "home",
-    "name": "Home",
-    "icon": "🏠"
-  },
-  {
-    "id": "travel",
-    "name": "Travel",
-    "icon": "✈️"
-  },
-  {
-    "id": "books",
-    "name": "Books",
-    "icon": "📚"
-  },
-  {
-    "id": "food",
-    "name": "Food",
-    "icon": "🍔"
-  },
-  {
-    "id": "94c24acf-74ea-4fa5-af2f-40728690d17a",
-    "name": "gjhs",
-    "icon": "🌐",
-    "createdAt": "2026-06-18T12:09:54.774Z"
+    "id": "decor",
+    "name": "Home Decor",
+    "icon": "🖼️"
   }
 ]

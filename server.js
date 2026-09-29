@@ -8,12 +8,17 @@ const path = require("path");
 const multer = require("multer");
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 const JWT_SECRET = "dealzone-super-secret-2026";
-const DATA_DIR = path.join(__dirname, "data");
-const UPLOADS_DIR = path.join(__dirname, "uploads");
+const AUTOMATION_KEY = process.env.AUTOMATION_KEY || "dealzone-automation-2026";
+// DATA_DIR/UPLOADS_DIR are overridable so a deployed instance can point
+// them at a mounted persistent volume (e.g. Fly.io) instead of the
+// container's own ephemeral filesystem.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
+const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 
-// Create uploads dir if missing
+// Create data/uploads dirs if missing
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 // Multer config — save to /uploads with original extension
@@ -160,6 +165,38 @@ app.delete("/api/deals/:id", auth, (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════
+//  AUTOMATION IMPORT ROUTE (pinterest-bot -> live deal)
+//  Service-to-service ingestion: a shared key instead of a user JWT, since
+//  the bot runs unattended and a 7-day-expiring login token would break it.
+// ═══════════════════════════════════════════════════════════
+app.post("/api/deals/import", (req, res) => {
+  const key = req.headers["x-automation-key"];
+  if (key !== AUTOMATION_KEY) return res.status(401).json({ error: "Invalid automation key" });
+
+  const { asin, title, affiliateUrl } = req.body;
+  if (!title || !affiliateUrl) return res.status(400).json({ error: "title and affiliateUrl required" });
+
+  const deals = read("deals.json");
+  const existing = deals.find((d) => (asin && d.asin === asin) || d.affiliateUrl === affiliateUrl);
+  if (existing) return res.status(200).json({ skipped: true, reason: "already imported", deal: existing });
+
+  const {
+    desc = "", category = "decor", price = "", original = "",
+    rating = 4.5, reviews = 0, image = "", badge = "", discount = "",
+    emoji = "🛍️", gradient = "from-cyan-500 to-blue-600", source = "automation",
+  } = req.body;
+
+  const deal = {
+    id: uuidv4(), asin, title, desc, category, price, original, rating, reviews,
+    affiliateUrl, image, badge, discount, emoji, gradient, source,
+    featured: false, active: true, createdAt: new Date().toISOString(),
+  };
+  deals.push(deal);
+  write("deals.json", deals);
+  res.status(201).json(deal);
+});
+
+// ═══════════════════════════════════════════════════════════
 //  CATEGORIES ROUTES
 // ═══════════════════════════════════════════════════════════
 app.get("/api/categories", (req, res) => res.json(read("categories.json")));
@@ -239,28 +276,13 @@ app.get("/api/stats", auth, (req, res) => {
 //  SEED DATA
 // ═══════════════════════════════════════════════════════════
 const SEED_CATEGORIES = [
-  { id: "tech",    name: "Tech",    icon: "💻" },
-  { id: "gaming",  name: "Gaming",  icon: "🎮" },
-  { id: "fashion", name: "Fashion", icon: "👗" },
-  { id: "health",  name: "Health",  icon: "💊" },
-  { id: "home",    name: "Home",    icon: "🏠" },
-  { id: "travel",  name: "Travel",  icon: "✈️" },
-  { id: "books",   name: "Books",   icon: "📚" },
-  { id: "food",    name: "Food",    icon: "🍔" },
+  { id: "decor", name: "Home Decor", icon: "🖼️" },
 ];
 
-const SEED_DEALS = [
-  { id: uuidv4(), title: "Apple AirPods Pro (2nd Gen)", desc: "Industry-leading noise cancellation, 30-hour total battery life.", category: "tech", emoji: "🎧", badge: "🔥 HOT", discount: "20% OFF", price: "$189", original: "$249", rating: 4.8, reviews: 12840, featured: true, active: true, affiliateUrl: "https://www.amazon.com/dp/B0BDHWDR12", gradient: "from-purple-500 to-blue-500", createdAt: new Date().toISOString() },
-  { id: uuidv4(), title: "Samsung 49\" Ultrawide Monitor", desc: "DQHD display with 240Hz refresh rate — perfect for gaming and productivity.", category: "tech", emoji: "🖥️", badge: "✨ NEW", discount: "15% OFF", price: "$849", original: "$999", rating: 4.7, reviews: 5320, featured: true, active: true, affiliateUrl: "https://www.amazon.com/dp/B0CKBR1K77", gradient: "from-cyan-500 to-blue-600", createdAt: new Date().toISOString() },
-  { id: uuidv4(), title: "Logitech MX Master 3S Mouse", desc: "8000 DPI sensor, whisper-quiet clicks, USB-C charging.", category: "tech", emoji: "🖱️", badge: null, discount: "10% OFF", price: "$89", original: "$99", rating: 4.9, reviews: 9210, featured: false, active: true, affiliateUrl: "https://www.amazon.com/dp/B09HM94VDS", gradient: "from-indigo-500 to-purple-600", createdAt: new Date().toISOString() },
-  { id: uuidv4(), title: "PlayStation 5 Console Bundle", desc: "Next-gen gaming with ultra-fast SSD and DualSense haptic controller.", category: "gaming", emoji: "🎮", badge: "🔥 HOT", discount: "Bundle Deal", price: "$499", original: "$549", rating: 4.9, reviews: 34500, featured: true, active: true, affiliateUrl: "https://www.amazon.com/dp/B0BCNKKZ91", gradient: "from-blue-600 to-indigo-700", createdAt: new Date().toISOString() },
-  { id: uuidv4(), title: "Razer BlackShark V2 Pro Headset", desc: "Wireless 70-hour battery, THX Spatial Audio, crystal-clear mic.", category: "gaming", emoji: "🎧", badge: null, discount: "25% OFF", price: "$149", original: "$199", rating: 4.5, reviews: 7830, featured: false, active: true, affiliateUrl: "https://www.amazon.com/dp/B0CH2WLMKM", gradient: "from-green-500 to-teal-600", createdAt: new Date().toISOString() },
-  { id: uuidv4(), title: "Nike Air Max 270 Running Shoes", desc: "Lightweight foam midsole with 270° Air unit. Style meets comfort.", category: "fashion", emoji: "👟", badge: "🏷️ SALE", discount: "30% OFF", price: "$99", original: "$140", rating: 4.4, reviews: 21000, featured: false, active: true, affiliateUrl: "https://www.amazon.com/dp/B07CKMHVHK", gradient: "from-orange-500 to-red-500", createdAt: new Date().toISOString() },
-  { id: uuidv4(), title: "Fitbit Charge 6 Fitness Tracker", desc: "Built-in GPS, heart rate, 7-day battery life, Google integration.", category: "health", emoji: "⌚", badge: "✨ NEW", discount: "18% OFF", price: "$129", original: "$159", rating: 4.6, reviews: 6720, featured: true, active: true, affiliateUrl: "https://www.amazon.com/dp/B0CCT8DHGQ", gradient: "from-emerald-500 to-green-600", createdAt: new Date().toISOString() },
-  { id: uuidv4(), title: "Dyson V15 Detect Cordless Vacuum", desc: "Laser dust detection, powerful suction, 60-minute battery.", category: "home", emoji: "🧹", badge: "⭐ TOP PICK", discount: "12% OFF", price: "$649", original: "$749", rating: 4.7, reviews: 8900, featured: false, active: true, affiliateUrl: "https://www.amazon.com/dp/B09JQ82YLS", gradient: "from-fuchsia-500 to-purple-600", createdAt: new Date().toISOString() },
-  { id: uuidv4(), title: "Atomic Habits – James Clear", desc: "The proven system for building good habits. 15 million copies sold.", category: "books", emoji: "📖", badge: null, discount: "20% OFF", price: "$15", original: "$19", rating: 4.9, reviews: 280000, featured: false, active: true, affiliateUrl: "https://www.amazon.com/dp/0735211299", gradient: "from-amber-500 to-yellow-600", createdAt: new Date().toISOString() },
-  { id: uuidv4(), title: "Keurig K-Elite Coffee Maker", desc: "Brew 4–12 oz, iced coffee mode, 75-oz reservoir.", category: "food", emoji: "☕", badge: "🔥 POPULAR", discount: "22% OFF", price: "$139", original: "$179", rating: 4.5, reviews: 29400, featured: false, active: true, affiliateUrl: "https://www.amazon.com/dp/B078NN6XDC", gradient: "from-rose-500 to-red-600", createdAt: new Date().toISOString() },
-];
+// No static seed deals — this site runs entirely on products the
+// pinterest-bot pipeline posts (see /api/deals/import). Deals only ever
+// come from that automation, never hand-written placeholder data.
+const SEED_DEALS = [];
 
 // ─── Start server ─────────────────────────────────────────
 initData().then(() => {
