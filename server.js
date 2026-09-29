@@ -6,19 +6,20 @@ const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
+const { read, write } = require("./db");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = "dealzone-super-secret-2026";
 const AUTOMATION_KEY = process.env.AUTOMATION_KEY || "dealzone-automation-2026";
-// DATA_DIR/UPLOADS_DIR are overridable so a deployed instance can point
-// them at a mounted persistent volume (e.g. Fly.io) instead of the
-// container's own ephemeral filesystem.
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
+// UPLOADS_DIR is overridable so a deployed instance can point it at a
+// mounted persistent volume (e.g. Fly.io) instead of the container's own
+// ephemeral filesystem. On Vercel this still isn't persistent (only /tmp
+// is writable there, and it's wiped every cold start) — uploaded images
+// aren't covered by the MongoDB backend in db.js, only deals/categories/
+// subscribers/users are.
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 
-// Create data/uploads dirs if missing
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 // Multer config — save to /uploads with original extension
@@ -45,15 +46,6 @@ app.use(express.json());
 // Serve uploaded images as static files
 app.use("/uploads", express.static(UPLOADS_DIR));
 
-// ─── File helpers ────────────────────────────────────────
-const read = (file) => {
-  const p = path.join(DATA_DIR, file);
-  if (!fs.existsSync(p)) return [];
-  try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return []; }
-};
-const write = (file, data) =>
-  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(data, null, 2));
-
 // ─── Auth middleware ──────────────────────────────────────
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(" ")[1];
@@ -68,31 +60,25 @@ const auth = (req, res, next) => {
 
 // ─── Startup: seed data ───────────────────────────────────
 async function initData() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
   // Admin user
-  const users = read("users.json");
+  const users = await read("users.json");
   if (users.length === 0) {
     const hash = await bcrypt.hash("admin123", 10);
-    write("users.json", [{ id: "1", name: "Admin User", username: "admin", password: hash, role: "admin", initials: "AD" }]);
+    await write("users.json", [{ id: "1", name: "Admin User", username: "admin", password: hash, role: "admin", initials: "AD" }]);
     console.log("✅ Admin created  →  username: admin  |  password: admin123");
   }
 
   // Seed deals
-  if (read("deals.json").length === 0) {
-    write("deals.json", SEED_DEALS);
+  if ((await read("deals.json")).length === 0) {
+    await write("deals.json", SEED_DEALS);
     console.log("✅ Deals seeded");
   }
 
   // Seed categories
-  if (read("categories.json").length === 0) {
-    write("categories.json", SEED_CATEGORIES);
+  if ((await read("categories.json")).length === 0) {
+    await write("categories.json", SEED_CATEGORIES);
     console.log("✅ Categories seeded");
   }
-
-  // Empty subscribers
-  if (!fs.existsSync(path.join(DATA_DIR, "subscribers.json")))
-    write("subscribers.json", []);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -116,7 +102,7 @@ app.delete("/api/upload/:filename", auth, (req, res) => {
 // ═══════════════════════════════════════════════════════════
 app.post("/api/auth/login", async (req, res) => {
   const { username, password } = req.body;
-  const users = read("users.json");
+  const users = await read("users.json");
   const user = users.find((u) => u.username === username);
   if (!user) return res.status(401).json({ error: "Invalid credentials" });
   const ok = await bcrypt.compare(password, user.password);
@@ -130,8 +116,8 @@ app.get("/api/auth/me", auth, (req, res) => res.json(req.user));
 // ═══════════════════════════════════════════════════════════
 //  DEALS ROUTES
 // ═══════════════════════════════════════════════════════════
-app.get("/api/deals", (req, res) => {
-  let deals = read("deals.json");
+app.get("/api/deals", async (req, res) => {
+  let deals = await read("deals.json");
   const { category, featured, active } = req.query;
   if (category && category !== "all") deals = deals.filter((d) => d.category === category);
   if (featured === "true") deals = deals.filter((d) => d.featured);
@@ -139,28 +125,28 @@ app.get("/api/deals", (req, res) => {
   res.json(deals);
 });
 
-app.post("/api/deals", auth, (req, res) => {
-  const deals = read("deals.json");
+app.post("/api/deals", auth, async (req, res) => {
+  const deals = await read("deals.json");
   const deal = { id: uuidv4(), active: true, createdAt: new Date().toISOString(), ...req.body };
   deals.push(deal);
-  write("deals.json", deals);
+  await write("deals.json", deals);
   res.status(201).json(deal);
 });
 
-app.put("/api/deals/:id", auth, (req, res) => {
-  const deals = read("deals.json");
+app.put("/api/deals/:id", auth, async (req, res) => {
+  const deals = await read("deals.json");
   const idx = deals.findIndex((d) => d.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: "Deal not found" });
   deals[idx] = { ...deals[idx], ...req.body, id: req.params.id, updatedAt: new Date().toISOString() };
-  write("deals.json", deals);
+  await write("deals.json", deals);
   res.json(deals[idx]);
 });
 
-app.delete("/api/deals/:id", auth, (req, res) => {
-  const deals = read("deals.json");
+app.delete("/api/deals/:id", auth, async (req, res) => {
+  const deals = await read("deals.json");
   const filtered = deals.filter((d) => d.id !== req.params.id);
   if (filtered.length === deals.length) return res.status(404).json({ error: "Deal not found" });
-  write("deals.json", filtered);
+  await write("deals.json", filtered);
   res.json({ success: true });
 });
 
@@ -169,14 +155,14 @@ app.delete("/api/deals/:id", auth, (req, res) => {
 //  Service-to-service ingestion: a shared key instead of a user JWT, since
 //  the bot runs unattended and a 7-day-expiring login token would break it.
 // ═══════════════════════════════════════════════════════════
-app.post("/api/deals/import", (req, res) => {
+app.post("/api/deals/import", async (req, res) => {
   const key = req.headers["x-automation-key"];
   if (key !== AUTOMATION_KEY) return res.status(401).json({ error: "Invalid automation key" });
 
   const { asin, title, affiliateUrl } = req.body;
   if (!title || !affiliateUrl) return res.status(400).json({ error: "title and affiliateUrl required" });
 
-  const deals = read("deals.json");
+  const deals = await read("deals.json");
   const existing = deals.find((d) => (asin && d.asin === asin) || d.affiliateUrl === affiliateUrl);
   if (existing) return res.status(200).json({ skipped: true, reason: "already imported", deal: existing });
 
@@ -192,68 +178,68 @@ app.post("/api/deals/import", (req, res) => {
     featured: false, active: true, createdAt: new Date().toISOString(),
   };
   deals.push(deal);
-  write("deals.json", deals);
+  await write("deals.json", deals);
   res.status(201).json(deal);
 });
 
 // ═══════════════════════════════════════════════════════════
 //  CATEGORIES ROUTES
 // ═══════════════════════════════════════════════════════════
-app.get("/api/categories", (req, res) => res.json(read("categories.json")));
+app.get("/api/categories", async (req, res) => res.json(await read("categories.json")));
 
-app.post("/api/categories", auth, (req, res) => {
-  const cats = read("categories.json");
+app.post("/api/categories", auth, async (req, res) => {
+  const cats = await read("categories.json");
   const cat = { id: uuidv4(), ...req.body, createdAt: new Date().toISOString() };
   cats.push(cat);
-  write("categories.json", cats);
+  await write("categories.json", cats);
   res.status(201).json(cat);
 });
 
-app.put("/api/categories/:id", auth, (req, res) => {
-  const cats = read("categories.json");
+app.put("/api/categories/:id", auth, async (req, res) => {
+  const cats = await read("categories.json");
   const idx = cats.findIndex((c) => c.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: "Category not found" });
   cats[idx] = { ...cats[idx], ...req.body, id: req.params.id };
-  write("categories.json", cats);
+  await write("categories.json", cats);
   res.json(cats[idx]);
 });
 
-app.delete("/api/categories/:id", auth, (req, res) => {
-  const cats = read("categories.json");
-  write("categories.json", cats.filter((c) => c.id !== req.params.id));
+app.delete("/api/categories/:id", auth, async (req, res) => {
+  const cats = await read("categories.json");
+  await write("categories.json", cats.filter((c) => c.id !== req.params.id));
   res.json({ success: true });
 });
 
 // ═══════════════════════════════════════════════════════════
 //  SUBSCRIBERS ROUTES
 // ═══════════════════════════════════════════════════════════
-app.get("/api/subscribers", auth, (req, res) => res.json(read("subscribers.json")));
+app.get("/api/subscribers", auth, async (req, res) => res.json(await read("subscribers.json")));
 
-app.post("/api/subscribers", (req, res) => {
-  const subs = read("subscribers.json");
+app.post("/api/subscribers", async (req, res) => {
+  const subs = await read("subscribers.json");
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: "Email required" });
   if (subs.find((s) => s.email === email))
     return res.status(409).json({ error: "Already subscribed" });
   const sub = { id: uuidv4(), email, subscribedAt: new Date().toISOString(), active: true };
   subs.push(sub);
-  write("subscribers.json", subs);
+  await write("subscribers.json", subs);
   res.status(201).json(sub);
 });
 
-app.delete("/api/subscribers/:id", auth, (req, res) => {
-  const subs = read("subscribers.json");
-  write("subscribers.json", subs.filter((s) => s.id !== req.params.id));
+app.delete("/api/subscribers/:id", auth, async (req, res) => {
+  const subs = await read("subscribers.json");
+  await write("subscribers.json", subs.filter((s) => s.id !== req.params.id));
   res.json({ success: true });
 });
 
 // ═══════════════════════════════════════════════════════════
 //  STATS ROUTE
 // ═══════════════════════════════════════════════════════════
-app.get("/api/stats", auth, (req, res) => {
-  const deals = read("deals.json");
-  const cats = read("categories.json");
-  const subs = read("subscribers.json");
+app.get("/api/stats", auth, async (req, res) => {
+  const deals = await read("deals.json");
+  const cats = await read("categories.json");
+  const subs = await read("subscribers.json");
   res.json({
     totalDeals: deals.length,
     activeDeals: deals.filter((d) => d.active !== false).length,
@@ -290,16 +276,13 @@ const SEED_DEALS = [];
 // and it would keep the function alive instead of returning). Locally /
 // on a normal host, initData() seeds default data, then the app listens.
 //
-// IMPORTANT (see README-VERCEL.md): Vercel's filesystem is read-only
-// except /tmp, and /tmp is wiped on every cold start. initData() re-seeds
-// on each cold start, so deals/admin-panel changes will NOT persist
-// reliably when deployed this way — this is a platform limitation, not a
-// bug here. Fine for a quick test; not fine for the pinterest-bot's
-// auto-sync to actually stick. Fix: move data/*.json storage to an
-// external database (see README-VERCEL.md).
+// Persistence: db.js picks MongoDB when MONGODB_URI is set (required on
+// Vercel — its filesystem is read-only outside /tmp, and /tmp is wiped
+// every cold start) or local JSON files otherwise. See README-VERCEL.md.
 if (process.env.VERCEL) {
-  // initData() is re-run once per cold start (see comment above) — cached
-  // per warm container so it doesn't re-seed on every single request.
+  // initData() is re-run once per cold start — cached per warm container
+  // (and effectively a no-op after the first request once MongoDB already
+  // has data, since the seed checks are "only if empty").
   let ready = null;
   module.exports = (req, res) => {
     if (!ready) ready = initData();
