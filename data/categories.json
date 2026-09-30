@@ -3,5 +3,10 @@
     "id": "decor",
     "name": "Home Decor",
     "icon": "🖼️"
+  },
+  {
+    "id": "kitchen",
+    "name": "Kitchen",
+    "icon": "🍳"
   }
 ]

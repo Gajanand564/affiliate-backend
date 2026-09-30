@@ -263,6 +263,7 @@ app.get("/api/stats", auth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 const SEED_CATEGORIES = [
   { id: "decor", name: "Home Decor", icon: "🖼️" },
+  { id: "kitchen", name: "Kitchen", icon: "🍳" },
 ];
 
 // No static seed deals — this site runs entirely on products the
