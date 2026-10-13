@@ -5,6 +5,21 @@
     "icon": "🖼️"
   },
   {
+    "id": "wall-decor",
+    "name": "Wall Decor",
+    "icon": "🖼️"
+  },
+  {
+    "id": "lighting",
+    "name": "Lighting",
+    "icon": "💡"
+  },
+  {
+    "id": "bathroom",
+    "name": "Bathroom",
+    "icon": "🪞"
+  },
+  {
     "id": "kitchen",
     "name": "Kitchen",
     "icon": "🍳"

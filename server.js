@@ -12,6 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = "dealzone-super-secret-2026";
 const AUTOMATION_KEY = process.env.AUTOMATION_KEY || "dealzone-automation-2026";
+const AMAZON_AFFILIATE_TAG = process.env.AMAZON_AFFILIATE_TAG || "budgethome0f3-20";
 // UPLOADS_DIR is overridable so a deployed instance can point it at a
 // mounted persistent volume (e.g. Fly.io) instead of the container's own
 // ephemeral filesystem. On Vercel this still isn't persistent (only /tmp
@@ -74,16 +75,72 @@ async function initData() {
     console.log("✅ Deals seeded");
   }
 
-  // Seed categories
-  if ((await read("categories.json")).length === 0) {
+  // Seed or merge categories. Deployed MongoDB instances may already have the
+  // original categories, so keep existing records and add any new seed ids.
+  const categories = await read("categories.json");
+  if (categories.length === 0) {
     await write("categories.json", SEED_CATEGORIES);
     console.log("✅ Categories seeded");
+  } else {
+    const existingIds = new Set(categories.map((c) => c.id));
+    const missing = SEED_CATEGORIES.filter((c) => !existingIds.has(c.id));
+    if (missing.length) {
+      await write("categories.json", [...categories, ...missing]);
+      console.log(`✅ Added ${missing.length} missing categories`);
+    }
   }
 }
 
 // ═══════════════════════════════════════════════════════════
 //  IMAGE UPLOAD ROUTE
 // ═══════════════════════════════════════════════════════════
+function normalizeAffiliateUrl(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    if (!/amazon\./i.test(parsed.hostname)) return url;
+    parsed.searchParams.set("tag", AMAZON_AFFILIATE_TAG);
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function publicDeal(deal) {
+  return { ...deal, affiliateUrl: normalizeAffiliateUrl(deal.affiliateUrl) };
+}
+
+async function trackDealClick(req, deal, source = "site") {
+  const clicks = await read("clicks.json");
+  const event = {
+    id: uuidv4(),
+    dealId: deal.id,
+    asin: deal.asin,
+    source,
+    src: req.query.src || "",
+    medium: req.query.utm_medium || req.query.medium || "",
+    campaign: req.query.utm_campaign || req.query.campaign || "",
+    content: req.query.utm_content || req.query.content || "",
+    referrer: req.get("referer") || "",
+    userAgent: req.get("user-agent") || "",
+    clickedAt: new Date().toISOString(),
+  };
+  clicks.push(event);
+  await write("clicks.json", clicks);
+
+  const deals = await read("deals.json");
+  const idx = deals.findIndex((d) => d.id === deal.id);
+  if (idx !== -1) {
+    deals[idx] = {
+      ...deals[idx],
+      clicks: Number(deals[idx].clicks || 0) + 1,
+      lastClickedAt: event.clickedAt,
+    };
+    await write("deals.json", deals);
+  }
+  return event;
+}
+
 app.post("/api/upload", auth, upload.single("image"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
   const url = `/uploads/${req.file.filename}`;
@@ -122,15 +179,50 @@ app.get("/api/deals", async (req, res) => {
   if (category && category !== "all") deals = deals.filter((d) => d.category === category);
   if (featured === "true") deals = deals.filter((d) => d.featured);
   if (active === "true") deals = deals.filter((d) => d.active !== false);
-  res.json(deals);
+  res.json(deals.map(publicDeal));
+});
+
+app.get("/api/deals/asin/:asin", async (req, res) => {
+  const asin = String(req.params.asin || "").trim().toUpperCase();
+  const deals = await read("deals.json");
+  const deal = deals.find((d) => String(d.asin || "").toUpperCase() === asin);
+  if (!deal) return res.status(404).json({ error: "Deal not found" });
+  res.json(publicDeal(deal));
+});
+
+app.post("/api/deals/:id/track-click", async (req, res) => {
+  const deals = await read("deals.json");
+  const deal = deals.find((d) => d.id === req.params.id);
+  if (!deal) return res.status(404).json({ error: "Deal not found" });
+  const event = await trackDealClick(req, deal, "site-card");
+  res.json({ success: true, eventId: event.id });
+});
+
+app.post("/api/deals/asin/:asin/track-click", async (req, res) => {
+  const asin = String(req.params.asin || "").trim().toUpperCase();
+  const deals = await read("deals.json");
+  const deal = deals.find((d) => String(d.asin || "").toUpperCase() === asin);
+  if (!deal) return res.status(404).json({ error: "Deal not found" });
+  const event = await trackDealClick(req, deal, "site-detail");
+  res.json({ success: true, eventId: event.id });
+});
+
+app.get("/api/go/:asin", async (req, res) => {
+  const asin = String(req.params.asin || "").trim().toUpperCase();
+  const deals = await read("deals.json");
+  const deal = deals.find((d) => String(d.asin || "").toUpperCase() === asin);
+  if (!deal) return res.status(404).send("Deal not found");
+  await trackDealClick(req, deal, req.query.src || "redirect");
+  res.redirect(302, normalizeAffiliateUrl(deal.affiliateUrl));
 });
 
 app.post("/api/deals", auth, async (req, res) => {
   const deals = await read("deals.json");
   const deal = { id: uuidv4(), active: true, createdAt: new Date().toISOString(), ...req.body };
+  deal.affiliateUrl = normalizeAffiliateUrl(deal.affiliateUrl);
   deals.push(deal);
   await write("deals.json", deals);
-  res.status(201).json(deal);
+  res.status(201).json(publicDeal(deal));
 });
 
 app.put("/api/deals/:id", auth, async (req, res) => {
@@ -138,8 +230,9 @@ app.put("/api/deals/:id", auth, async (req, res) => {
   const idx = deals.findIndex((d) => d.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: "Deal not found" });
   deals[idx] = { ...deals[idx], ...req.body, id: req.params.id, updatedAt: new Date().toISOString() };
+  deals[idx].affiliateUrl = normalizeAffiliateUrl(deals[idx].affiliateUrl);
   await write("deals.json", deals);
-  res.json(deals[idx]);
+  res.json(publicDeal(deals[idx]));
 });
 
 app.delete("/api/deals/:id", auth, async (req, res) => {
@@ -163,8 +256,9 @@ app.post("/api/deals/import", async (req, res) => {
   if (!title || !affiliateUrl) return res.status(400).json({ error: "title and affiliateUrl required" });
 
   const deals = await read("deals.json");
-  const existing = deals.find((d) => (asin && d.asin === asin) || d.affiliateUrl === affiliateUrl);
-  if (existing) return res.status(200).json({ skipped: true, reason: "already imported", deal: existing });
+  const normalizedAffiliateUrl = normalizeAffiliateUrl(affiliateUrl);
+  const existing = deals.find((d) => (asin && d.asin === asin) || normalizeAffiliateUrl(d.affiliateUrl) === normalizedAffiliateUrl);
+  if (existing) return res.status(200).json({ skipped: true, reason: "already imported", deal: publicDeal(existing) });
 
   const {
     desc = "", category = "decor", price = "", original = "",
@@ -174,12 +268,12 @@ app.post("/api/deals/import", async (req, res) => {
 
   const deal = {
     id: uuidv4(), asin, title, desc, category, price, original, rating, reviews,
-    affiliateUrl, image, badge, discount, emoji, gradient, source,
+    affiliateUrl: normalizedAffiliateUrl, image, badge, discount, emoji, gradient, source,
     featured: false, active: true, createdAt: new Date().toISOString(),
   };
   deals.push(deal);
   await write("deals.json", deals);
-  res.status(201).json(deal);
+  res.status(201).json(publicDeal(deal));
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -240,10 +334,12 @@ app.get("/api/stats", auth, async (req, res) => {
   const deals = await read("deals.json");
   const cats = await read("categories.json");
   const subs = await read("subscribers.json");
+  const clicks = await read("clicks.json");
   res.json({
     totalDeals: deals.length,
     activeDeals: deals.filter((d) => d.active !== false).length,
     featuredDeals: deals.filter((d) => d.featured).length,
+    totalClicks: clicks.length,
     totalCategories: cats.length,
     totalSubscribers: subs.length,
     newSubscribers: subs.filter((s) => {
@@ -263,6 +359,9 @@ app.get("/api/stats", auth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 const SEED_CATEGORIES = [
   { id: "decor", name: "Home Decor", icon: "🖼️" },
+  { id: "wall-decor", name: "Wall Decor", icon: "🖼️" },
+  { id: "lighting", name: "Lighting", icon: "💡" },
+  { id: "bathroom", name: "Bathroom", icon: "🪞" },
   { id: "kitchen", name: "Kitchen", icon: "🍳" },
 ];
 
