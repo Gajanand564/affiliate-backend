@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
-const { read, write } = require("./db");
+const { read, write, append, increment, remove } = require("./db");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -111,7 +111,6 @@ function publicDeal(deal) {
 }
 
 async function trackDealClick(req, deal, source = "site") {
-  const clicks = await read("clicks.json");
   const event = {
     id: uuidv4(),
     dealId: deal.id,
@@ -125,19 +124,8 @@ async function trackDealClick(req, deal, source = "site") {
     userAgent: req.get("user-agent") || "",
     clickedAt: new Date().toISOString(),
   };
-  clicks.push(event);
-  await write("clicks.json", clicks);
-
-  const deals = await read("deals.json");
-  const idx = deals.findIndex((d) => d.id === deal.id);
-  if (idx !== -1) {
-    deals[idx] = {
-      ...deals[idx],
-      clicks: Number(deals[idx].clicks || 0) + 1,
-      lastClickedAt: event.clickedAt,
-    };
-    await write("deals.json", deals);
-  }
+  await append("clicks.json", event);
+  await increment("deals.json", deal.id, "clicks", { lastClickedAt: event.clickedAt });
   return event;
 }
 
@@ -316,14 +304,12 @@ app.post("/api/subscribers", async (req, res) => {
   if (subs.find((s) => s.email === email))
     return res.status(409).json({ error: "Already subscribed" });
   const sub = { id: uuidv4(), email, subscribedAt: new Date().toISOString(), active: true };
-  subs.push(sub);
-  await write("subscribers.json", subs);
+  await append("subscribers.json", sub);
   res.status(201).json(sub);
 });
 
 app.delete("/api/subscribers/:id", auth, async (req, res) => {
-  const subs = await read("subscribers.json");
-  await write("subscribers.json", subs.filter((s) => s.id !== req.params.id));
+  await remove("subscribers.json", req.params.id);
   res.json({ success: true });
 });
 

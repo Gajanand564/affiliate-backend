@@ -64,4 +64,43 @@ async function write(file, data) {
   return MONGODB_URI ? mongoWrite(file, data) : fileWrite(file, data);
 }
 
-module.exports = { read, write };
+// Event inserts and counters must not replace an entire collection. File
+// operations stay synchronous so concurrent requests in this process cannot
+// interleave a read and its write.
+async function append(file, record) {
+  if (MONGODB_URI) {
+    const client = await getClient();
+    await client.db("dealzone").collection(collectionName(file)).insertOne({ ...record });
+  } else {
+    const records = fileRead(file);
+    records.push(record);
+    fileWrite(file, records);
+  }
+}
+
+async function increment(file, id, field, fields = {}) {
+  if (MONGODB_URI) {
+    const client = await getClient();
+    await client.db("dealzone").collection(collectionName(file)).updateOne(
+      { id }, { $inc: { [field]: 1 }, $set: fields }
+    );
+  } else {
+    const records = fileRead(file);
+    const record = records.find((item) => item.id === id);
+    if (record) {
+      Object.assign(record, fields, { [field]: Number(record[field] || 0) + 1 });
+      fileWrite(file, records);
+    }
+  }
+}
+
+async function remove(file, id) {
+  if (MONGODB_URI) {
+    const client = await getClient();
+    await client.db("dealzone").collection(collectionName(file)).deleteOne({ id });
+  } else {
+    fileWrite(file, fileRead(file).filter((record) => record.id !== id));
+  }
+}
+
+module.exports = { read, write, append, increment, remove };
