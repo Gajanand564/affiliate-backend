@@ -103,4 +103,19 @@ async function remove(file, id) {
   }
 }
 
-module.exports = { read, write, append, increment, remove };
+async function upsert(file, record) {
+  if (MONGODB_URI) {
+    const client = await getClient();
+    await client.db('dealzone').collection(collectionName(file)).updateOne(
+      { id: record.id }, { $set: { ...record } }, { upsert: true }
+    );
+  } else {
+    const records = fileRead(file);
+    const index = records.findIndex((item) => item.id === record.id);
+    if (index === -1) records.push(record);
+    else records[index] = record;
+    fileWrite(file, records);
+  }
+}
+
+module.exports = { read, write, append, increment, remove, upsert };

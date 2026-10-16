@@ -42,7 +42,7 @@ test("concurrent subscriptions and clicks persist without losing records", async
   ]));
   const port = 19000 + Math.floor(Math.random() * 10000);
   const child = spawn(process.execPath, [path.join(__dirname, "server.js")], {
-    env: { ...process.env, VERCEL: "", MONGODB_URI: "", PORT: String(port), DATA_DIR: dir, UPLOADS_DIR: path.join(dir, "uploads") },
+    env: { ...process.env, VERCEL: "", MONGODB_URI: "", PORT: String(port), DATA_DIR: dir, UPLOADS_DIR: path.join(dir, "uploads"), AUTOMATION_KEY: 'offline-social-key' },
     stdio: ["ignore", "pipe", "pipe"],
   });
   t.after(async () => {
@@ -76,4 +76,23 @@ test("concurrent subscriptions and clicks persist without losing records", async
   assert.match(redirect.headers.get("location"), /tag=budgethome0f3-20/);
   assert.equal(read("clicks.json").length, 41);
   assert.equal(read("clicks.json")[40].source, "pinterest");
+  const socialClick = await fetch(`${base}/go/B012345678?utm_source=instagram&utm_campaign=profile&utm_content=towels`, { redirect: 'manual' });
+  assert.equal(socialClick.status, 302);
+  assert.equal(read('clicks.json')[41].source, 'instagram');
+  assert.equal(read('clicks.json')[41].campaign, 'profile');
+
+  const socialPost = { platform: 'instagram', asin: 'B012345678', publishedId: '1234567890',
+    permalink: 'https://www.instagram.com/p/reviewed/', title: 'Reviewed product',
+    tip: 'Check dimensions before ordering.', publishedAt: new Date().toISOString() };
+  const importPost = (body, key = 'offline-social-key') => fetch(`${base}/social-posts/import`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-automation-key': key }, body: JSON.stringify(body),
+  });
+  assert.equal((await importPost(socialPost, 'wrong-key')).status, 401);
+  assert.equal((await importPost({ ...socialPost, permalink: 'https://untrusted.example/post' })).status, 400);
+  assert.equal((await importPost(socialPost)).status, 200);
+  assert.equal((await importPost(socialPost)).status, 200);
+  const publicPosts = await (await fetch(`${base}/social-posts`)).json();
+  assert.equal(publicPosts.length, 1);
+  assert.equal(publicPosts[0].instagram, socialPost.permalink);
+  assert.equal(read('social_posts.json').length, 1);
 });

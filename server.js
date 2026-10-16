@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
-const { read, write, append, increment, remove } = require("./db");
+const { read, write, append, increment, remove, upsert } = require("./db");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -94,6 +94,8 @@ async function initData() {
 // ═══════════════════════════════════════════════════════════
 //  IMAGE UPLOAD ROUTE
 // ═══════════════════════════════════════════════════════════
+const { trafficSummary } = require('./traffic-summary');
+
 function normalizeAffiliateUrl(url) {
   if (!url) return "";
   try {
@@ -120,6 +122,8 @@ async function trackDealClick(req, deal, source = "site") {
     medium: req.query.utm_medium || req.query.medium || "",
     campaign: req.query.utm_campaign || req.query.campaign || "",
     content: req.query.utm_content || req.query.content || "",
+    country: process.env.VERCEL && /^[A-Z]{2}$/.test(req.get("x-vercel-ip-country") || "")
+      ? req.get("x-vercel-ip-country") : "",
     referrer: req.get("referer") || "",
     userAgent: req.get("user-agent") || "",
     clickedAt: new Date().toISOString(),
@@ -200,7 +204,7 @@ app.get("/api/go/:asin", async (req, res) => {
   const deals = await read("deals.json");
   const deal = deals.find((d) => String(d.asin || "").toUpperCase() === asin);
   if (!deal) return res.status(404).send("Deal not found");
-  await trackDealClick(req, deal, req.query.src || "redirect");
+  await trackDealClick(req, deal, req.query.utm_source || req.query.src || "redirect");
   res.redirect(302, normalizeAffiliateUrl(deal.affiliateUrl));
 });
 
@@ -267,6 +271,33 @@ app.post("/api/deals/import", async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 //  CATEGORIES ROUTES
 // ═══════════════════════════════════════════════════════════
+app.get('/api/social-posts', async (req, res) => {
+  const records = await read('social_posts.json');
+  const groups = new Map();
+  for (const post of [...records].sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)))) {
+    if (!groups.has(post.asin)) groups.set(post.asin, { asin: post.asin, title: post.title, tip: post.tip, publishedAt: post.publishedAt });
+    groups.get(post.asin)[post.platform] = post.permalink;
+  }
+  res.json([...groups.values()].slice(0, 30));
+});
+
+app.post('/api/social-posts/import', async (req, res) => {
+  if (req.headers['x-automation-key'] !== AUTOMATION_KEY) return res.status(401).json({ error: 'Invalid automation key' });
+  const { platform, asin, publishedId, permalink, title, tip, publishedAt } = req.body;
+  const allowed = { instagram: ['www.instagram.com', 'instagram.com'], facebook: ['www.facebook.com', 'facebook.com'] };
+  let validLink = false;
+  try { const url = new URL(permalink); validLink = url.protocol === 'https:' && allowed[platform]?.includes(url.hostname); } catch { /* invalid URL */ }
+  if (!validLink || !/^[A-Z0-9]{10}$/.test(asin || '') || !/^[0-9_]{5,80}$/.test(publishedId || '') || typeof title !== 'string' || !title.trim() || !Number.isFinite(Date.parse(publishedAt))) {
+    return res.status(400).json({ error: 'Valid published social post fields required' });
+  }
+  const deals = await read('deals.json');
+  if (!deals.some((deal) => deal.asin === asin && deal.active !== false)) return res.status(400).json({ error: 'Active catalog product required' });
+  const record = { id: `${platform}:${publishedId}`, platform, asin, publishedId, permalink,
+    title: title.slice(0, 180), tip: typeof tip === 'string' ? tip.slice(0, 600) : '', publishedAt };
+  await upsert('social_posts.json', record);
+  res.json({ synced: true, id: record.id });
+});
+
 app.get("/api/categories", async (req, res) => res.json(await read("categories.json")));
 
 app.post("/api/categories", auth, async (req, res) => {
@@ -326,6 +357,7 @@ app.get("/api/stats", auth, async (req, res) => {
     activeDeals: deals.filter((d) => d.active !== false).length,
     featuredDeals: deals.filter((d) => d.featured).length,
     totalClicks: clicks.length,
+    trafficLast7Days: trafficSummary(clicks),
     totalCategories: cats.length,
     totalSubscribers: subs.length,
     newSubscribers: subs.filter((s) => {
