@@ -95,4 +95,12 @@ test("concurrent subscriptions and clicks persist without losing records", async
   assert.equal(publicPosts.length, 1);
   assert.equal(publicPosts[0].instagram, socialPost.permalink);
   assert.equal(read('social_posts.json').length, 1);
+  assert.equal((await fetch(`${base}/growth-summary`)).status, 401);
+  const growth = await fetch(`${base}/growth-summary`, { headers: { 'x-automation-key': 'offline-social-key' } });
+  assert.equal(growth.status, 200);
+  assert.equal(growth.headers.get('cache-control'), 'no-store');
+  const summary = await growth.json();
+  assert.equal(summary.channels.find((row) => row.source === 'instagram').amazonClicks, 1);
+  assert.equal(summary.products.find((row) => row.source === 'instagram').asin, 'B012345678');
+  assert.equal(JSON.stringify(summary).includes('userAgent'), false);
 });

@@ -94,7 +94,7 @@ async function initData() {
 // ═══════════════════════════════════════════════════════════
 //  IMAGE UPLOAD ROUTE
 // ═══════════════════════════════════════════════════════════
-const { trafficSummary } = require('./traffic-summary');
+const { trafficSummary, productTrafficSummary } = require('./traffic-summary');
 
 function normalizeAffiliateUrl(url) {
   if (!url) return "";
@@ -271,6 +271,15 @@ app.post("/api/deals/import", async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 //  CATEGORIES ROUTES
 // ═══════════════════════════════════════════════════════════
+app.get('/api/growth-summary', async (req, res) => {
+  if (req.headers['x-automation-key'] !== AUTOMATION_KEY) return res.status(401).json({ error: 'Invalid automation key' });
+  const clicks = await read('clicks.json');
+  res.set('Cache-Control', 'no-store');
+  res.json({ collectedAt: new Date().toISOString(), periodDays: 7,
+    measurement: 'Outbound Amazon click events, not unique visitors, reach or sales',
+    channels: trafficSummary(clicks), products: productTrafficSummary(clicks) });
+});
+
 app.get('/api/social-posts', async (req, res) => {
   const records = await read('social_posts.json');
   const groups = new Map();
