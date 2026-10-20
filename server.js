@@ -10,7 +10,8 @@ const { read, write, append, increment, remove, upsert } = require("./db");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = "dealzone-super-secret-2026";
+// Set JWT_SECRET in the hosting environment; the fallback keeps existing sessions working until then.
+const JWT_SECRET = process.env.JWT_SECRET || "dealzone-super-secret-2026";
 const AUTOMATION_KEY = process.env.AUTOMATION_KEY || "dealzone-automation-2026";
 const AMAZON_AFFILIATE_TAG = process.env.AMAZON_AFFILIATE_TAG || "budgethome0f3-20";
 // UPLOADS_DIR is overridable so a deployed instance can point it at a
@@ -95,6 +96,7 @@ async function initData() {
 //  IMAGE UPLOAD ROUTE
 // ═══════════════════════════════════════════════════════════
 const { trafficSummary, productTrafficSummary } = require('./traffic-summary');
+const { sanitizeVisitEvent, journeys } = require('./visitor-analytics');
 
 function normalizeAffiliateUrl(url) {
   if (!url) return "";
@@ -126,6 +128,9 @@ async function trackDealClick(req, deal, source = "site") {
       ? req.get("x-vercel-ip-country") : "",
     referrer: req.get("referer") || "",
     userAgent: req.get("user-agent") || "",
+    // Anonymous browser IDs join this click to its visit journey.
+    visitorId: /^[a-z0-9]{8,40}$/.test(req.query.vid || "") ? req.query.vid : "",
+    sessionId: /^[a-z0-9]{8,40}$/.test(req.query.sid || "") ? req.query.sid : "",
     clickedAt: new Date().toISOString(),
   };
   await append("clicks.json", event);
@@ -271,6 +276,22 @@ app.post("/api/deals/import", async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 //  CATEGORIES ROUTES
 // ═══════════════════════════════════════════════════════════
+// Anonymous visit events (page and product views) for the admin journeys dashboard.
+app.post('/api/events', async (req, res) => {
+  const event = sanitizeVisitEvent(req.body, {
+    userAgent: req.get('user-agent') || '',
+    country: process.env.VERCEL ? (req.get('x-vercel-ip-country') || '') : '',
+  });
+  if (event) await append('visits.json', event);
+  res.status(204).end();
+});
+
+app.get('/api/analytics/visitors', auth, async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 90);
+  const [visits, clicks, deals] = await Promise.all([read('visits.json'), read('clicks.json'), read('deals.json')]);
+  res.json(journeys(visits, clicks, deals, { days }));
+});
+
 app.get('/api/growth-summary', async (req, res) => {
   if (req.headers['x-automation-key'] !== AUTOMATION_KEY) return res.status(401).json({ error: 'Invalid automation key' });
   const clicks = await read('clicks.json');
