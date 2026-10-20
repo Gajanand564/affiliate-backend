@@ -167,6 +167,21 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.get("/api/auth/me", auth, (req, res) => res.json(req.user));
 
+// Change the signed-in admin's password (the seeded default must be replaced).
+app.post("/api/auth/password", auth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (typeof newPassword !== "string" || newPassword.length < 12 || newPassword === "admin123") {
+    return res.status(400).json({ error: "New password must be at least 12 characters" });
+  }
+  const users = await read("users.json");
+  const user = users.find((u) => u.id === req.user.id);
+  if (!user || !(await bcrypt.compare(String(currentPassword || ""), user.password))) {
+    return res.status(401).json({ error: "Current password is incorrect" });
+  }
+  await upsert("users.json", { ...user, password: await bcrypt.hash(newPassword, 10), passwordChangedAt: new Date().toISOString() });
+  res.json({ success: true });
+});
+
 // ═══════════════════════════════════════════════════════════
 //  DEALS ROUTES
 // ═══════════════════════════════════════════════════════════
