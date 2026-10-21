@@ -104,3 +104,32 @@ test("concurrent subscriptions and clicks persist without losing records", async
   assert.equal(summary.products.find((row) => row.source === 'instagram').asin, 'B012345678');
   assert.equal(JSON.stringify(summary).includes('userAgent'), false);
 });
+
+test("catalog reads filter by ASIN list and limit, and public reads are CDN-cacheable", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dealzone-catalog-"));
+  fs.writeFileSync(path.join(dir, "users.json"), JSON.stringify([{ id: "test-admin" }]));
+  fs.writeFileSync(path.join(dir, "deals.json"), JSON.stringify([
+    { id: "a", asin: "B000000001", category: "decor", affiliateUrl: "https://www.amazon.com/dp/B000000001" },
+    { id: "b", asin: "B000000002", category: "decor", affiliateUrl: "https://www.amazon.com/dp/B000000002" },
+    { id: "c", asin: "B000000003", category: "lighting", affiliateUrl: "https://www.amazon.com/dp/B000000003" },
+  ]));
+  const port = 19000 + Math.floor(Math.random() * 10000);
+  const child = spawn(process.execPath, [path.join(__dirname, "server.js")], {
+    env: { ...process.env, VERCEL: "", MONGODB_URI: "", PORT: String(port), DATA_DIR: dir, UPLOADS_DIR: path.join(dir, "uploads") },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(async () => {
+    if (child.exitCode === null) { const closed = new Promise((r) => child.once("exit", r)); child.kill(); await closed; }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  await new Promise((resolve) => child.stdout.on("data", (d) => /port|running|listening/i.test(String(d)) && resolve()));
+  const base = `http://127.0.0.1:${port}/api`;
+  const get = async (q) => (await fetch(`${base}/deals${q}`)).json();
+  assert.deepEqual((await get("?asins=B000000003,b000000001,bad")).map((d) => d.id).sort(), ["a", "c"]);
+  assert.deepEqual((await get("?category=decor&exclude=a&limit=5")).map((d) => d.id), ["b"]);
+  assert.equal((await get("?limit=1")).length, 1);
+  const response = await fetch(`${base}/deals`);
+  assert.match(response.headers.get("cache-control"), /s-maxage=300/);
+  const admin = await fetch(`${base}/deals`, { headers: { Authorization: "Bearer x" } });
+  assert.doesNotMatch(admin.headers.get("cache-control") || "", /s-maxage/);
+});

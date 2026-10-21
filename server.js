@@ -185,12 +185,26 @@ app.post("/api/auth/password", auth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 //  DEALS ROUTES
 // ═══════════════════════════════════════════════════════════
+// Public catalog reads may be served from the CDN for a few minutes; signed-in
+// admin requests (Authorization header) are not cached by Vercel.
+function publicCache(res) {
+  res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=86400");
+}
+
 app.get("/api/deals", async (req, res) => {
   let deals = await read("deals.json");
-  const { category, featured, active } = req.query;
+  const { category, featured, active, asins, limit, exclude } = req.query;
   if (category && category !== "all") deals = deals.filter((d) => d.category === category);
   if (featured === "true") deals = deals.filter((d) => d.featured);
   if (active === "true") deals = deals.filter((d) => d.active !== false);
+  if (asins) {
+    const wanted = new Set(String(asins).toUpperCase().split(",").filter((a) => /^[A-Z0-9]{10}$/.test(a)).slice(0, 60));
+    deals = deals.filter((d) => wanted.has(String(d.asin || "").toUpperCase()));
+  }
+  if (exclude) deals = deals.filter((d) => d.id !== exclude && d.asin !== exclude);
+  const max = parseInt(limit, 10);
+  if (max > 0) deals = deals.slice(0, Math.min(max, 200));
+  if (!req.headers.authorization) publicCache(res);
   res.json(deals.map(publicDeal));
 });
 
@@ -199,6 +213,7 @@ app.get("/api/deals/asin/:asin", async (req, res) => {
   const deals = await read("deals.json");
   const deal = deals.find((d) => String(d.asin || "").toUpperCase() === asin);
   if (!deal) return res.status(404).json({ error: "Deal not found" });
+  publicCache(res);
   res.json(publicDeal(deal));
 });
 
@@ -317,6 +332,7 @@ app.get('/api/growth-summary', async (req, res) => {
 });
 
 app.get('/api/social-posts', async (req, res) => {
+  publicCache(res);
   const records = await read('social_posts.json');
   const groups = new Map();
   for (const post of [...records].sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)))) {
