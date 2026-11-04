@@ -133,3 +133,44 @@ test("catalog reads filter by ASIN list and limit, and public reads are CDN-cach
   const admin = await fetch(`${base}/deals`, { headers: { Authorization: "Bearer x" } });
   assert.doesNotMatch(admin.headers.get("cache-control") || "", /s-maxage/);
 });
+
+test("pin links send India to an Amazon.in search and everyone else to the Amazon.com product", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dealzone-country-"));
+  fs.writeFileSync(path.join(dir, "users.json"), JSON.stringify([{ id: "test-admin" }]));
+  fs.writeFileSync(path.join(dir, "deals.json"), JSON.stringify([
+    { id: "a", asin: "B000000001", title: "Rattan Table Lamp, 18\" Boho", category: "lighting", affiliateUrl: "https://www.amazon.com/dp/B000000001?tag=old" },
+  ]));
+  const port = 19000 + Math.floor(Math.random() * 10000);
+  // VERCEL=1 so the edge country header is trusted, as in production.
+  const child = spawn(process.execPath, ["-e", `require("http").createServer(require(${JSON.stringify(path.join(__dirname, "server.js"))})).listen(${port}, () => console.log("listening"))`], {
+    env: { ...process.env, VERCEL: "1", MONGODB_URI: "", DATA_DIR: dir, UPLOADS_DIR: path.join(dir, "uploads") },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(async () => {
+    if (child.exitCode === null) { const closed = new Promise((r) => child.once("exit", r)); child.kill(); await closed; }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  await new Promise((resolve) => child.stdout.on("data", (d) => /listening/.test(String(d)) && resolve()));
+  const go = (asin, query, country) => fetch(`http://127.0.0.1:${port}/api/go/${asin}?${query}`,
+    { redirect: "manual", headers: country ? { "x-vercel-ip-country": country } : {} });
+
+  const india = await go("B000000001", "src=pinterest&route=country", "IN");
+  assert.equal(india.status, 302);
+  const inUrl = new URL(india.headers.get("location"));
+  assert.equal(inUrl.hostname, "www.amazon.in");
+  assert.equal(inUrl.searchParams.get("tag"), "homedealzone-21");
+  assert.equal(inUrl.searchParams.get("k"), "Rattan Table Lamp 18 Boho");
+  assert.equal(india.headers.get("cache-control"), "no-store");
+
+  for (const [query, country] of [["src=pinterest&route=country", "US"], ["src=pinterest&route=country", "DE"], ["src=pinterest&route=country", ""], ["src=site", "IN"]]) {
+    const response = await go("B000000001", query, country);
+    assert.equal(response.headers.get("location"), "https://www.amazon.com/dp/B000000001?tag=budgethome0f3-20", `${query} ${country}`);
+  }
+  const missing = await go("B000000009", "route=country", "IN");
+  assert.equal(missing.headers.get("location"), "https://www.amazon.com/dp/B000000009?tag=budgethome0f3-20");
+  assert.equal((await go("B000000009", "src=site", "US")).status, 404);
+
+  const clicks = JSON.parse(fs.readFileSync(path.join(dir, "clicks.json"), "utf8"));
+  assert.deepEqual(clicks.map((c) => [c.country, c.destination]),
+    [["IN", "amazon.in"], ["US", "amazon.com"], ["DE", "amazon.com"], ["", "amazon.com"], ["IN", "amazon.com"]]);
+});

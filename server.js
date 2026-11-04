@@ -14,6 +14,7 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || "dealzone-super-secret-2026";
 const AUTOMATION_KEY = process.env.AUTOMATION_KEY || "dealzone-automation-2026";
 const AMAZON_AFFILIATE_TAG = process.env.AMAZON_AFFILIATE_TAG || "budgethome0f3-20";
+const AMAZON_IN_AFFILIATE_TAG = process.env.AMAZON_IN_AFFILIATE_TAG || "homedealzone-21";
 // UPLOADS_DIR is overridable so a deployed instance can point it at a
 // mounted persistent volume (e.g. Fly.io) instead of the container's own
 // ephemeral filesystem. On Vercel this still isn't persistent (only /tmp
@@ -114,7 +115,23 @@ function publicDeal(deal) {
   return { ...deal, affiliateUrl: normalizeAffiliateUrl(deal.affiliateUrl) };
 }
 
-async function trackDealClick(req, deal, source = "site") {
+// Visitor country from Vercel's edge header (empty when not on Vercel or unknown).
+function visitorCountry(req) {
+  const country = String(req.get("x-vercel-ip-country") || "").toUpperCase();
+  return process.env.VERCEL && /^[A-Z]{2}$/.test(country) ? country : "";
+}
+
+// Amazon.com ASINs often have no Amazon.in listing, so India gets a search for
+// the product name instead of a claim that it is the same item.
+function amazonInSearchUrl(title) {
+  const words = String(title || "").replace(/[^\p{L}\p{N}\s-]/gu, " ").split(/\s+/).filter(Boolean).slice(0, 10);
+  const url = new URL("https://www.amazon.in/s");
+  url.searchParams.set("k", words.join(" "));
+  url.searchParams.set("tag", AMAZON_IN_AFFILIATE_TAG);
+  return url.toString();
+}
+
+async function trackDealClick(req, deal, source = "site", destination = "amazon.com") {
   const event = {
     id: uuidv4(),
     dealId: deal.id,
@@ -124,8 +141,8 @@ async function trackDealClick(req, deal, source = "site") {
     medium: req.query.utm_medium || req.query.medium || "",
     campaign: req.query.utm_campaign || req.query.campaign || "",
     content: req.query.utm_content || req.query.content || "",
-    country: process.env.VERCEL && /^[A-Z]{2}$/.test(req.get("x-vercel-ip-country") || "")
-      ? req.get("x-vercel-ip-country") : "",
+    country: visitorCountry(req),
+    destination,
     referrer: req.get("referer") || "",
     userAgent: req.get("user-agent") || "",
     // Anonymous browser IDs join this click to its visit journey.
@@ -238,9 +255,17 @@ app.get("/api/go/:asin", async (req, res) => {
   const asin = String(req.params.asin || "").trim().toUpperCase();
   const deals = await read("deals.json");
   const deal = deals.find((d) => String(d.asin || "").toUpperCase() === asin);
-  if (!deal) return res.status(404).send("Deal not found");
-  await trackDealClick(req, deal, req.query.utm_source || req.query.src || "redirect");
-  res.redirect(302, normalizeAffiliateUrl(deal.affiliateUrl));
+  // route=country (pin links): visitors in India go to Amazon.in, everyone else to Amazon.com.
+  const byCountry = req.query.route === "country";
+  if (!deal) {
+    if (!byCountry || !/^[A-Z0-9]{10}$/.test(asin)) return res.status(404).send("Deal not found");
+    res.set("Cache-Control", "no-store");
+    return res.redirect(302, normalizeAffiliateUrl(`https://www.amazon.com/dp/${asin}`));
+  }
+  const india = byCountry && visitorCountry(req) === "IN" && deal.title;
+  await trackDealClick(req, deal, req.query.utm_source || req.query.src || "redirect", india ? "amazon.in" : "amazon.com");
+  res.set("Cache-Control", "no-store");
+  res.redirect(302, india ? amazonInSearchUrl(deal.title) : normalizeAffiliateUrl(deal.affiliateUrl));
 });
 
 app.post("/api/deals", auth, async (req, res) => {
