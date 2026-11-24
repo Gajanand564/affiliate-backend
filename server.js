@@ -96,7 +96,7 @@ async function initData() {
 // ═══════════════════════════════════════════════════════════
 //  IMAGE UPLOAD ROUTE
 // ═══════════════════════════════════════════════════════════
-const { trafficSummary, productTrafficSummary } = require('./traffic-summary');
+const { trafficSummary, productTrafficSummary, botClickCount, isBot } = require('./traffic-summary');
 const { sanitizeVisitEvent, journeys } = require('./visitor-analytics');
 
 function normalizeAffiliateUrl(url) {
@@ -150,8 +150,10 @@ async function trackDealClick(req, deal, source = "site", destination = "amazon.
     sessionId: /^[a-z0-9]{8,40}$/.test(req.query.sid || "") ? req.query.sid : "",
     clickedAt: new Date().toISOString(),
   };
+  // Crawlers still get the redirect but are marked and never counted as clicks.
+  if (isBot(event.userAgent)) event.bot = true;
   await append("clicks.json", event);
-  await increment("deals.json", deal.id, "clicks", { lastClickedAt: event.clickedAt });
+  if (!event.bot) await increment("deals.json", deal.id, "clicks", { lastClickedAt: event.clickedAt });
   return event;
 }
 
@@ -353,7 +355,8 @@ app.get('/api/growth-summary', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({ collectedAt: new Date().toISOString(), periodDays: 7,
     measurement: 'Outbound Amazon click events, not unique visitors, reach or sales',
-    channels: trafficSummary(clicks), products: productTrafficSummary(clicks) });
+    channels: trafficSummary(clicks), products: productTrafficSummary(clicks),
+    botClicksExcluded: botClickCount(clicks) });
 });
 
 app.get('/api/social-posts', async (req, res) => {
