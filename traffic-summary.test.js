@@ -57,3 +57,20 @@ test('people in the Pinterest and Instagram apps are not treated as bots', () =>
   assert.equal(isBot('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36 Pinterest/Android'), false);
   assert.equal(isBot('Mozilla/5.0 (compatible; Pinterestbot/1.0; +http://www.pinterest.com/bot.html)'), true);
 });
+
+test('a burst of clicks spread over many products is not counted; one viral product is', () => {
+  const { burstClickIds, isBurst } = require('./traffic-summary');
+  const now = Date.parse('2026-11-25T04:00:00Z');
+  const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+  const burst = Array.from({ length: 20 }, (_, i) => ({ id: `b${i}`, asin: `B0000000${String(i).padStart(2, '0')}`, source: 'redirect',
+    userAgent: ua, clickedAt: new Date(Date.parse('2026-11-25T03:00:00Z') + i * 20000).toISOString() }));
+  const viral = Array.from({ length: 20 }, (_, i) => ({ id: `v${i}`, asin: 'B0VIRAL001', source: 'pinterest',
+    userAgent: ua, clickedAt: new Date(Date.parse('2026-11-24T12:00:00Z') + i * 20000).toISOString() }));
+  const person = { id: 'p1', asin: 'B0PERSON01', source: 'pinterest', userAgent: ua, clickedAt: '2026-11-24T18:00:00Z' };
+  assert.equal(burstClickIds([...burst, ...viral, person]).size, 20);
+  assert.equal(isBurst(burst.slice(0, 14)), false);
+  assert.equal(isBurst(burst.slice(0, 15)), true);
+  const rows = trafficSummary([...burst, ...viral, person], now);
+  assert.equal(rows.find((row) => row.source === 'redirect'), undefined);
+  assert.equal(rows.find((row) => row.source === 'pinterest').amazonClicks, 21);
+});

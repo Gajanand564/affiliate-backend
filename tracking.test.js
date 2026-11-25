@@ -174,3 +174,38 @@ test("pin links send India to an Amazon.in search and everyone else to the Amazo
   assert.deepEqual(clicks.map((c) => [c.country, c.destination]),
     [["IN", "amazon.in"], ["US", "amazon.com"], ["DE", "amazon.com"], ["", "amazon.com"], ["IN", "amazon.com"]]);
 });
+
+test("crawlers and click bursts reach Amazon without the affiliate tag and are not counted", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dealzone-burst-"));
+  fs.writeFileSync(path.join(dir, "users.json"), JSON.stringify([{ id: "test-admin" }]));
+  const deals = Array.from({ length: 16 }, (_, i) => {
+    const asin = `B0000000${String(i).padStart(2, "0")}`;
+    return { id: `d${i}`, asin, title: `Lamp ${i}`, affiliateUrl: `https://www.amazon.com/dp/${asin}`, clicks: 0 };
+  });
+  fs.writeFileSync(path.join(dir, "deals.json"), JSON.stringify(deals));
+  const port = 19000 + Math.floor(Math.random() * 10000);
+  const child = spawn(process.execPath, [path.join(__dirname, "server.js")], {
+    env: { ...process.env, VERCEL: "", MONGODB_URI: "", PORT: String(port), DATA_DIR: dir, UPLOADS_DIR: path.join(dir, "uploads"), AUTOMATION_KEY: "offline-social-key" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(async () => {
+    if (child.exitCode === null) { const closed = new Promise((r) => child.once("exit", r)); child.kill(); await closed; }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  await new Promise((resolve) => child.stdout.on("data", (d) => /port|running|listening/i.test(String(d)) && resolve()));
+  const base = `http://127.0.0.1:${port}/api`;
+  const browser = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+  const go = (asin, ua = browser) => fetch(`${base}/go/${asin}?src=site`, { redirect: "manual", headers: { "user-agent": ua } });
+  const tagOf = (response) => new URL(response.headers.get("location")).searchParams.get("tag");
+
+  assert.equal(tagOf(await go("B000000000", "Googlebot/2.1")), null);
+  const tags = [];
+  for (const deal of deals) tags.push(tagOf(await go(deal.asin)));
+  assert.deepEqual(tags.slice(0, 14), Array(14).fill("budgethome0f3-20"));
+  assert.deepEqual(tags.slice(14), [null, null]);
+  const stored = JSON.parse(fs.readFileSync(path.join(dir, "clicks.json"), "utf8"));
+  assert.equal(stored.filter((c) => c.burst).length, 2);
+  const summary = await (await fetch(`${base}/growth-summary`, { headers: { "x-automation-key": "offline-social-key" } })).json();
+  assert.equal(summary.channels.length, 0);
+  assert.equal(summary.botClicksExcluded, 17);
+});

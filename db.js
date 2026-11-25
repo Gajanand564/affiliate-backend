@@ -118,4 +118,15 @@ async function upsert(file, record) {
   }
 }
 
-module.exports = { read, write, append, increment, remove, upsert };
+// Records whose ISO timestamp field is at or after sinceIso (ISO strings sort
+// in time order), without loading the whole collection.
+async function recent(file, field, sinceIso) {
+  if (MONGODB_URI) {
+    const client = await getClient();
+    return client.db('dealzone').collection(collectionName(file))
+      .find({ [field]: { $gte: sinceIso } }, { projection: { _id: 0 } }).toArray();
+  }
+  return fileRead(file).filter((record) => String(record[field] || '') >= sinceIso);
+}
+
+module.exports = { read, write, append, increment, remove, upsert, recent };

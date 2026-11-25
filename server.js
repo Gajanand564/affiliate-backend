@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
-const { read, write, append, increment, remove, upsert } = require("./db");
+const { read, write, append, increment, remove, upsert, recent } = require("./db");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -96,7 +96,7 @@ async function initData() {
 // ═══════════════════════════════════════════════════════════
 //  IMAGE UPLOAD ROUTE
 // ═══════════════════════════════════════════════════════════
-const { trafficSummary, productTrafficSummary, botClickCount, isBot, clickDiagnostics } = require('./traffic-summary');
+const { trafficSummary, productTrafficSummary, botClickCount, isBot, clickDiagnostics, isBurst, BURST_WINDOW_MS } = require('./traffic-summary');
 const { sanitizeVisitEvent, journeys } = require('./visitor-analytics');
 
 function normalizeAffiliateUrl(url) {
@@ -105,6 +105,18 @@ function normalizeAffiliateUrl(url) {
     const parsed = new URL(url);
     if (!/amazon\./i.test(parsed.hostname)) return url;
     parsed.searchParams.set("tag", AMAZON_AFFILIATE_TAG);
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+// Bots still reach the product, but without our tag, so they never count as
+// Associates clicks on the account.
+function untaggedUrl(url) {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.delete("tag");
     return parsed.toString();
   } catch {
     return url;
@@ -131,7 +143,7 @@ function amazonInSearchUrl(title) {
   return url.toString();
 }
 
-async function trackDealClick(req, deal, source = "site", destination = "amazon.com") {
+async function trackDealClick(req, deal, source = "site", destination = "amazon.com", flags = {}) {
   const event = {
     id: uuidv4(),
     dealId: deal.id,
@@ -150,10 +162,11 @@ async function trackDealClick(req, deal, source = "site", destination = "amazon.
     sessionId: /^[a-z0-9]{8,40}$/.test(req.query.sid || "") ? req.query.sid : "",
     clickedAt: new Date().toISOString(),
   };
-  // Crawlers still get the redirect but are marked and never counted as clicks.
+  // Crawlers and click bursts still reach Amazon, untagged, and are never counted.
   if (isBot(event.userAgent)) event.bot = true;
+  if (flags.burst) event.burst = true;
   await append("clicks.json", event);
-  if (!event.bot) await increment("deals.json", deal.id, "clicks", { lastClickedAt: event.clickedAt });
+  if (!event.bot && !event.burst) await increment("deals.json", deal.id, "clicks", { lastClickedAt: event.clickedAt });
   return event;
 }
 
@@ -265,9 +278,13 @@ app.get("/api/go/:asin", async (req, res) => {
     return res.redirect(302, normalizeAffiliateUrl(`https://www.amazon.com/dp/${asin}`));
   }
   const india = byCountry && visitorCountry(req) === "IN" && deal.title;
-  await trackDealClick(req, deal, req.query.utm_source || req.query.src || "redirect", india ? "amazon.in" : "amazon.com");
+  const now = new Date();
+  const lately = await recent("clicks.json", "clickedAt", new Date(now - BURST_WINDOW_MS).toISOString());
+  const burst = isBurst([...lately, { asin: deal.asin, userAgent: req.get("user-agent") || "" }]);
+  const event = await trackDealClick(req, deal, req.query.utm_source || req.query.src || "redirect", india ? "amazon.in" : "amazon.com", { burst });
+  const target = india ? amazonInSearchUrl(deal.title) : normalizeAffiliateUrl(deal.affiliateUrl);
   res.set("Cache-Control", "no-store");
-  res.redirect(302, india ? amazonInSearchUrl(deal.title) : normalizeAffiliateUrl(deal.affiliateUrl));
+  res.redirect(302, event.bot || event.burst ? untaggedUrl(target) : target);
 });
 
 app.post("/api/deals", auth, async (req, res) => {
