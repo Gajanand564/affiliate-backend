@@ -14,8 +14,8 @@ function isBot(userAgent) {
 // Proxy bots with ordinary browser user agents (2026-11-24/25: 221 "clicks"
 // in one hour, one or two on each of ~125 products, from JP/CA/BD/TH...).
 // People arrive a few a day and a viral pin concentrates on one product, so
-// many clicks spread over many products within ten minutes is automated.
-const BURST_WINDOW_MS = 10 * 60 * 1000;
+// many clicks spread over many products within an hour is automated.
+const BURST_WINDOW_MS = 60 * 60 * 1000; // 1 h: one crawl also ran ~20 an hour for 7 hours
 const BURST_MIN_CLICKS = 15;
 const BURST_MIN_PRODUCTS = 10;
 
