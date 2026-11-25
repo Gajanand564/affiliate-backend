@@ -96,7 +96,7 @@ async function initData() {
 // ═══════════════════════════════════════════════════════════
 //  IMAGE UPLOAD ROUTE
 // ═══════════════════════════════════════════════════════════
-const { trafficSummary, productTrafficSummary, botClickCount, isBot } = require('./traffic-summary');
+const { trafficSummary, productTrafficSummary, botClickCount, isBot, clickDiagnostics } = require('./traffic-summary');
 const { sanitizeVisitEvent, journeys } = require('./visitor-analytics');
 
 function normalizeAffiliateUrl(url) {
@@ -356,7 +356,7 @@ app.get('/api/growth-summary', async (req, res) => {
   res.json({ collectedAt: new Date().toISOString(), periodDays: 7,
     measurement: 'Outbound Amazon click events, not unique visitors, reach or sales',
     channels: trafficSummary(clicks), products: productTrafficSummary(clicks),
-    botClicksExcluded: botClickCount(clicks) });
+    botClicksExcluded: botClickCount(clicks), diagnostics: clickDiagnostics(clicks) });
 });
 
 app.get('/api/social-posts', async (req, res) => {

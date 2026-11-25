@@ -57,4 +57,33 @@ function botClickCount(clicks, now = Date.now()) {
   }).length;
 }
 
-module.exports = { trafficSummary, productTrafficSummary, botClickCount, isBot };
+// Shape of counted clicks (2026-11-25: checking a sudden jump to ~110 Amazon
+// clicks a day). No IPs or visitor IDs are returned, only aggregate counts.
+function clickDiagnostics(clicks, now = Date.now()) {
+  const since = now - 7 * 24 * 60 * 60 * 1000;
+  const tally = (map, key) => map.set(key, (map.get(key) || 0) + 1);
+  const days = new Map(), hours = new Map(), agents = new Map(), referrers = new Map(), countries = new Map(), asinsPerDay = new Map();
+  let withVisitor = 0, total = 0;
+  for (const click of clicks) {
+    const time = Date.parse(click.clickedAt);
+    if (!Number.isFinite(time) || time < since || time > now || !counted(click)) continue;
+    total++;
+    const day = click.clickedAt.slice(0, 10);
+    tally(days, day + ' ' + String(click.source || 'unknown'));
+    tally(hours, click.clickedAt.slice(0, 13));
+    tally(agents, String(click.userAgent || '').slice(0, 160));
+    let ref = '';
+    try { ref = click.referrer ? new URL(click.referrer).hostname : ''; } catch { ref = 'invalid'; }
+    tally(referrers, ref || '(none)');
+    tally(countries, click.country || '(unknown)');
+    if (!asinsPerDay.has(day)) asinsPerDay.set(day, new Set());
+    asinsPerDay.get(day).add(click.asin);
+    if (click.visitorId) withVisitor++;
+  }
+  const top = (map, n) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+  return { total, withVisitorId: withVisitor, byDaySource: top(days, 40), busiestHours: top(hours, 15),
+    topUserAgents: top(agents, 12), referrers: top(referrers, 12), countries: top(countries, 12),
+    distinctAsinsPerDay: [...asinsPerDay.entries()].map(([d, set]) => [d, set.size]).sort() };
+}
+
+module.exports = { trafficSummary, productTrafficSummary, botClickCount, isBot, clickDiagnostics };
