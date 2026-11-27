@@ -220,7 +220,9 @@ app.post("/api/auth/password", auth, async (req, res) => {
 // Public catalog reads may be served from the CDN for a few minutes; signed-in
 // admin requests (Authorization header) are not cached by Vercel.
 function publicCache(res) {
-  res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=86400");
+  // The CDN answers in ~0.2 s; a miss wakes the function and database (~1.6 s).
+  // Deals change a few times a day, so an hour at the edge is fine.
+  res.setHeader("Cache-Control", "public, max-age=60, s-maxage=3600, stale-while-revalidate=86400");
 }
 
 app.get("/api/deals", async (req, res) => {
@@ -236,8 +238,11 @@ app.get("/api/deals", async (req, res) => {
   if (exclude) deals = deals.filter((d) => d.id !== exclude && d.asin !== exclude);
   const max = parseInt(limit, 10);
   if (max > 0) deals = deals.slice(0, Math.min(max, 200));
-  if (!req.headers.authorization) publicCache(res);
-  res.json(deals.map(publicDeal));
+  if (req.headers.authorization) return res.json(deals.map(publicDeal));
+  publicCache(res);
+  // Lists only need a card-length description (the full text was ~40% of a 360 KB response).
+  res.json(deals.map(publicDeal).map((deal) => (deal.desc && deal.desc.length > 240
+    ? { ...deal, desc: deal.desc.slice(0, 240).replace(/\s+\S*$/, '') + '…' } : deal)));
 });
 
 app.get("/api/deals/asin/:asin", async (req, res) => {

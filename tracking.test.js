@@ -129,7 +129,7 @@ test("catalog reads filter by ASIN list and limit, and public reads are CDN-cach
   assert.deepEqual((await get("?category=decor&exclude=a&limit=5")).map((d) => d.id), ["b"]);
   assert.equal((await get("?limit=1")).length, 1);
   const response = await fetch(`${base}/deals`);
-  assert.match(response.headers.get("cache-control"), /s-maxage=300/);
+  assert.match(response.headers.get("cache-control"), /s-maxage=3600/);
   const admin = await fetch(`${base}/deals`, { headers: { Authorization: "Bearer x" } });
   assert.doesNotMatch(admin.headers.get("cache-control") || "", /s-maxage/);
 });
