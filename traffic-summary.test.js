@@ -74,3 +74,13 @@ test('a burst of clicks spread over many products is not counted; one viral prod
   assert.equal(rows.find((row) => row.source === 'redirect'), undefined);
   assert.equal(rows.find((row) => row.source === 'pinterest').amazonClicks, 21);
 });
+
+test('frozen iOS 13.2.3 client and chupa.fun referrer are bots', () => {
+  const { isBot } = require('./traffic-summary');
+  const fake = 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1';
+  const real = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1';
+  assert.equal(isBot(fake), true);
+  assert.equal(isBot(real), false);
+  assert.equal(isBot(real, 'https://www.chupa.fun/x'), true);
+  assert.equal(isBot(real, 'https://www.freedealzone.biz/finds'), false);
+});

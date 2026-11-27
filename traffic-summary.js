@@ -5,10 +5,16 @@ const BOT_UA = /bot\b|crawl|spider|slurp|scrape|headless|preview|lighthouse|pint
 
 // Real browsers always send a user agent; an empty one is a script. Events
 // without the field at all (very old records) stay counted.
-function isBot(userAgent) {
+// Seen Nov 2026: a scripted client sends this frozen 2019 iOS 13.2.3 Safari
+// string (32 of 73 "real" clicks in a week, spread under the burst limit),
+// and spam referrer chupa.fun sends click traffic.
+const FAKE_UA = /iPhone OS 13_2_3 like Mac OS X.*Version\/13\.0\.3 Mobile\/15E148/;
+const SPAM_REFERRER = /^https?:\/\/([a-z0-9-]+\.)*chupa\.fun(\/|$)/i;
+
+function isBot(userAgent, referrer = '') {
   if (userAgent === undefined) return false;
   const ua = String(userAgent || '').trim();
-  return !ua || BOT_UA.test(ua);
+  return !ua || BOT_UA.test(ua) || FAKE_UA.test(ua) || SPAM_REFERRER.test(String(referrer || ''));
 }
 
 // Proxy bots with ordinary browser user agents (2026-11-24/25: 221 "clicks"
@@ -20,14 +26,14 @@ const BURST_MIN_CLICKS = 15;
 const BURST_MIN_PRODUCTS = 10;
 
 function isBurst(recentClicks) {
-  const live = recentClicks.filter((click) => !click.bot && !isBot(click.userAgent));
+  const live = recentClicks.filter((click) => !click.bot && !isBot(click.userAgent, click.referrer));
   return live.length >= BURST_MIN_CLICKS && new Set(live.map((click) => click.asin)).size >= BURST_MIN_PRODUCTS;
 }
 
 // IDs of stored clicks that fall in any burst window (also catches bursts
 // recorded before live detection existed).
 function burstClickIds(clicks) {
-  const live = clicks.filter((click) => !click.bot && !isBot(click.userAgent) && Number.isFinite(Date.parse(click.clickedAt)))
+  const live = clicks.filter((click) => !click.bot && !isBot(click.userAgent, click.referrer) && Number.isFinite(Date.parse(click.clickedAt)))
     .map((click) => ({ click, time: Date.parse(click.clickedAt) })).sort((a, b) => a.time - b.time);
   const ids = new Set();
   let start = 0;
@@ -40,7 +46,7 @@ function burstClickIds(clicks) {
 }
 
 function counted(click, bursts = new Set()) {
-  return !click.bot && !click.burst && !isBot(click.userAgent) && !bursts.has(click.id);
+  return !click.bot && !click.burst && !isBot(click.userAgent, click.referrer) && !bursts.has(click.id);
 }
 
 function trafficSummary(clicks, now = Date.now()) {

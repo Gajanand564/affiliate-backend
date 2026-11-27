@@ -163,7 +163,7 @@ async function trackDealClick(req, deal, source = "site", destination = "amazon.
     clickedAt: new Date().toISOString(),
   };
   // Crawlers and click bursts still reach Amazon, untagged, and are never counted.
-  if (isBot(event.userAgent)) event.bot = true;
+  if (isBot(event.userAgent, event.referrer)) event.bot = true;
   if (flags.burst) event.burst = true;
   await append("clicks.json", event);
   if (!event.bot && !event.burst) await increment("deals.json", deal.id, "clicks", { lastClickedAt: event.clickedAt });
