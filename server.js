@@ -368,12 +368,18 @@ app.get('/api/analytics/visitors', auth, async (req, res) => {
 
 app.get('/api/growth-summary', async (req, res) => {
   if (req.headers['x-automation-key'] !== AUTOMATION_KEY) return res.status(401).json({ error: 'Invalid automation key' });
-  const clicks = await read('clicks.json');
+  const [clicks, visits, deals] = await Promise.all([read('clicks.json'), read('visits.json'), read('deals.json')]);
+  // Aggregates only: no visitor or session IDs leave the admin dashboard.
+  const { sessions, ...visitorTotals } = journeys(visits, clicks, deals, { days: 7, limit: 100000 });
+  const landing = new Map();
+  for (const item of sessions) landing.set(item.landing || 'unknown', (landing.get(item.landing || 'unknown') || 0) + 1);
+  visitorTotals.topLandingPages = [...landing].map(([page, count]) => ({ page, sessions: count }))
+    .sort((a, b) => b.sessions - a.sessions).slice(0, 15);
   res.set('Cache-Control', 'no-store');
   res.json({ collectedAt: new Date().toISOString(), periodDays: 7,
     measurement: 'Outbound Amazon click events, not unique visitors, reach or sales',
     channels: trafficSummary(clicks), products: productTrafficSummary(clicks),
-    botClicksExcluded: botClickCount(clicks), diagnostics: clickDiagnostics(clicks) });
+    botClicksExcluded: botClickCount(clicks), diagnostics: clickDiagnostics(clicks), visitors: visitorTotals });
 });
 
 app.get('/api/social-posts', async (req, res) => {
